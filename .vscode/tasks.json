@@ -1,0 +1,20 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build",
+			"type": "shell",
+			"command": "zig build -p .",
+		},
+		{
+			"label":"move",
+			"type": "shell",
+			"command": "mv bin/filedb filedb"
+		},
+		{
+			"label": "buildAndMove",
+			"dependsOn":["build", "move"],
+			"dependsOrder": "sequence"
+		}
+	]
+}
