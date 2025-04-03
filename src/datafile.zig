@@ -47,4 +47,24 @@ pub const Datafile = struct {
 
         return stat.size;
     }
+
+    pub fn store(self: *Datafile, buf: []const u8) !u64 {
+        const sz = try self.writer.write(buf);
+
+        const offset = self.offset;
+        self.offset += sz;
+
+        return offset;
+    }
+
+    pub fn get(self: Datafile, buf: []u8, value_pos: usize, value_size: usize) !void {
+        try self.reader.seekTo(value_pos);
+        const data = try self.reader.read(buf);
+
+        if (data != value_size) {
+            return ErrorMissingData.MissingData;
+        }
+    }
 };
+
+const ErrorMissingData = error{MissingData};

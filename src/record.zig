@@ -8,6 +8,7 @@ pub const Record = struct {
     value_len: usize,
     key: []const u8,
     value: []const u8,
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, key: []const u8, value: []const u8) !*Record {
         const record = try allocator.create(Record); // better error handling
@@ -20,6 +21,7 @@ pub const Record = struct {
             .value_len = value.len,
             .key = key_copy,
             .value = value_copy,
+            .allocator = allocator,
         };
 
         return record;
@@ -37,9 +39,26 @@ pub const Record = struct {
         try writer.writeAll(self.value);
     }
 
-    pub fn deinit(self: *Record, allocator: std.mem.Allocator) void {
-        allocator.free(self.key);
-        allocator.free(self.value);
-        allocator.destroy(self);
+    pub fn deinit(self: *Record) void {
+        self.allocator.free(self.key);
+        self.allocator.free(self.value);
+        self.allocator.destroy(self);
     }
 };
+
+pub fn decodeRecord(allocator: std.mem.Allocator, buf: []u8) !*Record {
+    var fbs = std.io.fixedBufferStream(buf);
+    var reader = fbs.reader();
+
+    _ = try reader.readInt(u32, std.builtin.Endian.little);
+    _ = try reader.readInt(i64, std.builtin.Endian.little);
+    const key_len = try reader.readInt(usize, std.builtin.Endian.little);
+    const value_len = try reader.readInt(usize, std.builtin.Endian.little);
+    const key = try allocator.alloc(u8, key_len);
+    defer allocator.free(key);
+    _ = try reader.read(key);
+    const value = try allocator.alloc(u8, value_len);
+    defer allocator.free(value);
+    _ = try reader.read(value);
+    return Record.init(allocator, key, value);
+}

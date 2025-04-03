@@ -13,10 +13,28 @@ pub fn listAllDatabaseFiles(allocator: std.mem.Allocator) !std.ArrayList([]const
         if (std.mem.endsWith(u8, entry.basename, ".db")) {
             const f = try allocator.dupe(u8, entry.basename);
             try filelist.append(f);
-            std.debug.print("filename: {s}\n", .{entry.basename});
         }
     }
     return filelist;
+}
+
+pub fn parseIdFromFilename(filename: []const u8) !u32 {
+    const prefix = "file_";
+    const suffix = ".db";
+    const start_index = prefix.len;
+    const end_index = std.mem.indexOf(u8, filename, suffix) orelse filename.len;
+
+    if (start_index >= end_index) {
+        std.debug.print("Invalid format\n", .{});
+        return error.InvalidFormat;
+    }
+
+    // Extract the substring containing the number
+    const id_str = filename[start_index..end_index];
+
+    // Convert to integer
+    const id = try std.fmt.parseInt(u32, id_str, 10);
+    return id;
 }
 
 pub fn validateKV(key: []const u8, value: []const u8) !void {
