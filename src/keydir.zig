@@ -67,7 +67,6 @@ pub fn storeHashMap(
 
     // Write number of hashmap entries
     try writer.writeInt(u32, @intCast(hashmap.count()), std.builtin.Endian.little);
-    std.log.debug("hashmap: {}", .{hashmap});
     var it = hashmap.iterator();
     while (it.next()) |entry| {
         // Write key length and key

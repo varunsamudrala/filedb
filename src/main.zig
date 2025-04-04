@@ -19,15 +19,23 @@ const FileDB = struct {
     mu: std.Thread.Mutex,
     allocator: std.mem.Allocator,
 
-    pub fn init(id: u32, allocator: std.mem.Allocator) !*FileDB {
+    pub fn init(allocator: std.mem.Allocator) !*FileDB {
         const keydir = try kd.loadKeyDir(allocator);
+        const oldfile = try oldfiles.OldFiles.init(allocator);
+
+        var id: u32 = 1;
+        var it = oldfile.filemap.keyIterator();
+        while (it.next()) |entry| {
+            if (entry.* >= id) {
+                id = entry.* + 1;
+            }
+        }
         // const keydir = std.StringHashMap(kd.Metadata).init(allocator);
         const filedb = try allocator.create(FileDB);
-        std.log.debug("keydir: keys count:{}, values: {}", .{ keydir.count(), keydir });
         filedb.* = .{
             .datafile = try datafile.Datafile.init(id),
             .keydir = keydir,
-            .oldfiles = try oldfiles.OldFiles.init(allocator),
+            .oldfiles = oldfile,
             .bufPool = std.heap.MemoryPool([]const u8).init(allocator),
             .mu = std.Thread.Mutex{},
             .allocator = allocator,
@@ -35,15 +43,15 @@ const FileDB = struct {
         return filedb;
     }
 
-    pub fn deinit(self: *FileDB, allocator: std.mem.Allocator) void {
-        self.oldfiles.deinit(allocator);
+    pub fn deinit(self: *FileDB) void {
+        self.oldfiles.deinit(self.allocator);
         self.datafile.deinit();
-        var it = self.keydir.iterator();
+        var it = self.keydir.keyIterator();
         while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.*);
         }
         self.keydir.deinit();
-        allocator.destroy(self);
+        self.allocator.destroy(self);
     }
 
     pub fn put(self: *FileDB, key: []const u8, value: []const u8) !void {
@@ -115,21 +123,14 @@ pub fn main() !void {
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
-    // initialize id of new file
-    const id = 2;
-
-    const filedb = try FileDB.init(id, allocator);
-    defer filedb.deinit(allocator);
+    const filedb = try FileDB.init(allocator);
+    defer filedb.deinit();
     var it = filedb.keydir.iterator();
     while (it.next()) |entry| {
         std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
     try filedb.put("a", "value1");
     std.log.debug("\n", .{});
-    it = filedb.keydir.iterator();
-    while (it.next()) |entry| {
-        std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-    }
     try filedb.put("b", "value2");
     try filedb.put("c", "value3");
     try filedb.put("d", "value4");
@@ -138,9 +139,19 @@ pub fn main() !void {
     try filedb.put("b", "extra_large_value");
     try filedb.put("c", "sm");
 
-    const value = try filedb.get("hello");
-    std.log.debug("found value {any}", .{value});
-    if (value != null)
-        allocator.free(value.?);
-    try kd.storeHashMap(&filedb.keydir);
+    it = filedb.keydir.iterator();
+    while (it.next()) |entry| {
+        std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+    const value = try filedb.get("a");
+    defer kd.storeHashMap(&filedb.keydir) catch |err| {
+        std.log.debug("Error storing hashmap: {}", .{err});
+    };
+    if (value == null) {
+        std.log.debug("Value Not found in DB", .{});
+        return;
+    }
+    defer allocator.free(value.?);
+    const final_value = value.?;
+    std.log.debug("found value {s}", .{final_value});
 }
