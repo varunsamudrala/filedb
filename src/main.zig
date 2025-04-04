@@ -14,16 +14,19 @@ const Record = @import("record.zig");
 const FileDB = struct {
     datafile: datafile.Datafile,
     bufPool: std.heap.MemoryPool([]const u8),
-    keydir: std.StringHashMap(std.ArrayList(kd.metadata)),
+    keydir: std.StringHashMap(kd.Metadata),
     oldfiles: *oldfiles.OldFiles,
     mu: std.Thread.Mutex,
     allocator: std.mem.Allocator,
 
     pub fn init(id: u32, allocator: std.mem.Allocator) !*FileDB {
+        const keydir = try kd.loadKeyDir(allocator);
+        // const keydir = std.StringHashMap(kd.Metadata).init(allocator);
         const filedb = try allocator.create(FileDB);
+        std.log.debug("keydir: keys count:{}, values: {}", .{ keydir.count(), keydir });
         filedb.* = .{
             .datafile = try datafile.Datafile.init(id),
-            .keydir = std.StringHashMap(std.ArrayList(kd.metadata)).init(allocator),
+            .keydir = keydir,
             .oldfiles = try oldfiles.OldFiles.init(allocator),
             .bufPool = std.heap.MemoryPool([]const u8).init(allocator),
             .mu = std.Thread.Mutex{},
@@ -35,9 +38,9 @@ const FileDB = struct {
     pub fn deinit(self: *FileDB, allocator: std.mem.Allocator) void {
         self.oldfiles.deinit(allocator);
         self.datafile.deinit();
-        var keydirIterator = self.keydir.valueIterator();
-        while (keydirIterator.next()) |entry| {
-            entry.deinit();
+        var it = self.keydir.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
         }
         self.keydir.deinit();
         allocator.destroy(self);
@@ -64,17 +67,16 @@ const FileDB = struct {
         //store to datafile
         const offset = try self.datafile.store(buf);
         //store to keydir
-        const metadata = kd.metadata.init(self.datafile.id, record_size, offset, record.tstamp);
-        var entry = try self.keydir.getOrPut(key);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = std.ArrayList(kd.metadata).init(self.allocator);
-        }
-        try entry.value_ptr.append(metadata);
+        const metadata = kd.Metadata.init(self.datafile.id, record_size, offset, record.tstamp);
+        self.keydir.put(key, metadata) catch |err| {
+            std.debug.print("Failed to insert key: {s}, error: {s}\n", .{ key, @errorName(err) });
+            return err;
+        };
 
         //fsync optional
     }
 
-    pub fn get(self: *FileDB, key: []const u8) !?std.ArrayList([]const u8) {
+    pub fn get(self: *FileDB, key: []const u8) !?[]const u8 {
         self.mu.lock();
         defer self.mu.unlock();
 
@@ -82,35 +84,29 @@ const FileDB = struct {
         return result;
     }
 
-    fn getValue(self: *FileDB, key: []const u8) !?std.ArrayList([]const u8) {
-        // for (self.keydir.iterator())
+    fn getValue(self: *FileDB, key: []const u8) !?[]const u8 {
         const metadata = self.keydir.get(key);
         if (metadata == null) {
             // if no key exists in the keydir
             return undefined;
         }
-        var responseArray = std.ArrayList([]const u8).init(self.allocator);
-        errdefer responseArray.deinit(); // Free list on error
 
-        for (metadata.?.items) |entry| {
-            const buf = try self.allocator.alloc(u8, entry.value_sz);
-            defer self.allocator.free(buf);
-            // defer self.allocator.destroy(buf);
-            if (self.datafile.id == entry.file_id) {
-                // get data from datafile
-                try self.datafile.get(buf, entry.value_pos, entry.value_sz);
-            } else {
-                //get data from oldfiles
-                try self.oldfiles.get(buf, entry.file_id, entry.value_pos, entry.value_sz);
-            }
-            //decode data and put in response array
-            const record = try Record.decodeRecord(self.allocator, buf);
-            defer record.deinit();
-
-            const value = try self.allocator.dupe(u8, record.value);
-            try responseArray.append(value);
+        const buf = try self.allocator.alloc(u8, metadata.?.value_sz);
+        defer self.allocator.free(buf);
+        // defer self.allocator.destroy(buf);
+        if (self.datafile.id == metadata.?.file_id) {
+            // get data from datafile
+            try self.datafile.get(buf, metadata.?.value_pos, metadata.?.value_sz);
+        } else {
+            //get data from oldfiles
+            try self.oldfiles.get(buf, metadata.?.file_id, metadata.?.value_pos, metadata.?.value_sz);
         }
-        return responseArray;
+        //decode data and put in response array
+        const record = try Record.decodeRecord(self.allocator, buf);
+        defer record.deinit();
+
+        const value = try self.allocator.dupe(u8, record.value);
+        return value;
     }
 };
 
@@ -124,16 +120,27 @@ pub fn main() !void {
 
     const filedb = try FileDB.init(id, allocator);
     defer filedb.deinit(allocator);
-    try filedb.put("hello", "cow");
+    var it = filedb.keydir.iterator();
+    while (it.next()) |entry| {
+        std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+    try filedb.put("a", "value1");
     std.log.debug("\n", .{});
-    try filedb.put("hello", "nakndeaekacow");
-    std.log.debug("\n", .{});
-    try filedb.put("knsknrknknhello", "audfjendjsd");
+    it = filedb.keydir.iterator();
+    while (it.next()) |entry| {
+        std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+    try filedb.put("b", "value2");
+    try filedb.put("c", "value3");
+    try filedb.put("d", "value4");
+    try filedb.put("e", "value5");
+    try filedb.put("a", "large_value");
+    try filedb.put("b", "extra_large_value");
+    try filedb.put("c", "sm");
 
     const value = try filedb.get("hello");
-    std.log.debug("found value {any}", .{value.?.items});
-    for (value.?.items) |buf| {
-        allocator.free(buf); // Free each allocated buffer
-    }
-    value.?.deinit(); // Deinitialize the ArrayList itself
+    std.log.debug("found value {any}", .{value});
+    if (value != null)
+        allocator.free(value.?);
+    try kd.storeHashMap(&filedb.keydir);
 }
