@@ -5,6 +5,8 @@ const datafile = @import("datafile.zig");
 pub const OldFiles = struct {
     filelist: std.ArrayList([]const u8),
     filemap: std.AutoHashMap(u32, datafile.Datafile),
+    allocator: std.mem.Allocator,
+
     pub fn init(allocator: std.mem.Allocator) !*OldFiles {
         const filelist = try utils.listAllDatabaseFiles(allocator);
         var filemap = std.AutoHashMap(u32, datafile.Datafile).init(allocator);
@@ -14,13 +16,13 @@ pub const OldFiles = struct {
             try filemap.put(file_id, df);
         }
         const oldfiles = try allocator.create(OldFiles);
-        oldfiles.* = .{ .filelist = filelist, .filemap = filemap };
+        oldfiles.* = .{ .filelist = filelist, .filemap = filemap, .allocator = allocator };
         return oldfiles;
     }
 
-    pub fn deinit(self: *OldFiles, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *OldFiles) void {
         for (self.filelist.items) |entry| {
-            allocator.free(entry);
+            self.allocator.free(entry);
         }
         self.filelist.deinit();
         var keydirIterator = self.filemap.valueIterator();
@@ -28,7 +30,7 @@ pub const OldFiles = struct {
             entry.deinit();
         }
         self.filemap.deinit();
-        allocator.destroy(self);
+        self.allocator.destroy(self);
     }
 
     pub fn get(self: OldFiles, buf: []u8, file_id: u32, value_pos: usize, value_size: usize) !void {

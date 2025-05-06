@@ -1,5 +1,5 @@
 const std = @import("std");
-const datafile = @import("./datafile.zig");
+const datafile = @import("datafile.zig");
 const utils = @import("utils.zig");
 const oldfiles = @import("oldfiles.zig");
 const kd = @import("keydir.zig");
@@ -13,12 +13,12 @@ const Record = @import("record.zig");
 
 const FileDB = struct {
     datafile: datafile.Datafile,
-    bufPool: std.heap.MemoryPool([]const u8),
     keydir: std.StringHashMap(kd.Metadata),
     oldfiles: *oldfiles.OldFiles,
     mu: std.Thread.Mutex,
     allocator: std.mem.Allocator,
 
+    // initialize the filedb with keydir and other structures
     pub fn init(allocator: std.mem.Allocator) !*FileDB {
         const keydir = try kd.loadKeyDir(allocator);
         const oldfile = try oldfiles.OldFiles.init(allocator);
@@ -36,7 +36,6 @@ const FileDB = struct {
             .datafile = try datafile.Datafile.init(id),
             .keydir = keydir,
             .oldfiles = oldfile,
-            .bufPool = std.heap.MemoryPool([]const u8).init(allocator),
             .mu = std.Thread.Mutex{},
             .allocator = allocator,
         };
@@ -44,7 +43,7 @@ const FileDB = struct {
     }
 
     pub fn deinit(self: *FileDB) void {
-        self.oldfiles.deinit(self.allocator);
+        self.oldfiles.deinit();
         self.datafile.deinit();
         var it = self.keydir.keyIterator();
         while (it.next()) |entry| {
@@ -143,15 +142,15 @@ pub fn main() !void {
     while (it.next()) |entry| {
         std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
-    const value = try filedb.get("a");
     defer kd.storeHashMap(&filedb.keydir) catch |err| {
         std.log.debug("Error storing hashmap: {}", .{err});
     };
+    const value = try filedb.get("a");
     if (value == null) {
         std.log.debug("Value Not found in DB", .{});
         return;
     }
     defer allocator.free(value.?);
     const final_value = value.?;
-    std.log.debug("found value {s}", .{final_value});
+    std.log.debug("found value '{s}'", .{final_value});
 }

@@ -3,11 +3,11 @@
 	"configurations": [
 		{
 			"name": "Debug Main",
-			"type": "lldb-dap",
+			"type": "node",
 			"request": "launch",
 			"program": "${workspaceFolder}/filedb",
 			"preLaunchTask": "buildAndMove",
-			"MIMode": "lldb",
+			"MIMode": "gdb",
 			"cwd": "${workspaceFolder}"
 		}
 	]
