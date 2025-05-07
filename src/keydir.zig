@@ -42,8 +42,6 @@ pub fn loadKeyDir(allocator: std.mem.Allocator) !std.StringHashMap(Metadata) {
         errdefer allocator.free(key_buf);
         try reader.readNoEof(key_buf);
 
-        // Read number of metadata entries
-
         // Read metadata items
         const file_id = try reader.readInt(u32, std.builtin.Endian.little);
         const value_sz = try reader.readInt(usize, std.builtin.Endian.little);

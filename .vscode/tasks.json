@@ -1,20 +1,15 @@
 {
-	"version": "2.0.0",
-	"tasks": [
-		{
-			"label": "build",
-			"type": "shell",
-			"command": "zig build -p .",
-		},
-		{
-			"label":"move",
-			"type": "shell",
-			"command": "mv bin/filedb filedb"
-		},
-		{
-			"label": "buildAndMove",
-			"dependsOn":["build", "move"],
-			"dependsOrder": "sequence"
-		}
-	]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "zig: build",
+      "type": "shell",
+      "command": "zig build-exe src/main.zig -femit-bin=zig-out/main",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
 }

@@ -23,6 +23,7 @@ const FileDB = struct {
         const keydir = try kd.loadKeyDir(allocator);
         const oldfile = try oldfiles.OldFiles.init(allocator);
 
+        // get the last used fileid
         var id: u32 = 1;
         var it = oldfile.filemap.keyIterator();
         while (it.next()) |entry| {
@@ -30,7 +31,7 @@ const FileDB = struct {
                 id = entry.* + 1;
             }
         }
-        // const keydir = std.StringHashMap(kd.Metadata).init(allocator);
+
         const filedb = try allocator.create(FileDB);
         filedb.* = .{
             .datafile = try datafile.Datafile.init(id),
@@ -43,13 +44,18 @@ const FileDB = struct {
     }
 
     pub fn deinit(self: *FileDB) void {
+        var key_it = self.keydir.iterator();
+        while (key_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+
+        self.keydir.deinit();
+
+        // Clean up other resources
         self.oldfiles.deinit();
         self.datafile.deinit();
-        var it = self.keydir.keyIterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.*);
-        }
-        self.keydir.deinit();
+
+        // Finally free the FileDB struct itself
         self.allocator.destroy(self);
     }
 
@@ -63,24 +69,26 @@ const FileDB = struct {
 
     fn storeKV(self: *FileDB, key: []const u8, value: []const u8) !void {
         const record = try Record.Record.init(self.allocator, key, value);
-        defer record.deinit(); // free record after writingo
+        defer record.deinit();
 
         const record_size = @sizeOf(Record.Record) - @sizeOf([]u8) * 2 + record.key_len + record.value_len;
         const buf = try self.allocator.alloc(u8, record_size);
-        defer self.allocator.free(buf); // Free buffer after writing
+        defer self.allocator.free(buf);
 
         try record.encode(buf);
-
-        //store to datafile
         const offset = try self.datafile.store(buf);
-        //store to keydir
         const metadata = kd.Metadata.init(self.datafile.id, record_size, offset, record.tstamp);
-        self.keydir.put(key, metadata) catch |err| {
-            std.debug.print("Failed to insert key: {s}, error: {s}\n", .{ key, @errorName(err) });
-            return err;
-        };
 
-        //fsync optional
+        // get the entry if already present, if doesnt exist, dynamically allocate a new
+        // key else reuse the old one.
+        const entry = try self.keydir.getOrPut(key);
+        if (!entry.found_existing) {
+            const copy_key = try self.allocator.dupe(u8, key);
+            entry.key_ptr.* = copy_key;
+        }
+        entry.value_ptr.* = metadata;
+
+        //possible fsync
     }
 
     pub fn get(self: *FileDB, key: []const u8) !?[]const u8 {
@@ -129,14 +137,15 @@ pub fn main() !void {
         std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
     try filedb.put("a", "value1");
-    std.log.debug("\n", .{});
     try filedb.put("b", "value2");
+    try filedb.put("f", "value2");
+    try filedb.put("g", "value2");
     try filedb.put("c", "value3");
     try filedb.put("d", "value4");
     try filedb.put("e", "value5");
     try filedb.put("a", "large_value");
     try filedb.put("b", "extra_large_value");
-    try filedb.put("c", "sm");
+    try filedb.put("c", "sm12");
 
     it = filedb.keydir.iterator();
     while (it.next()) |entry| {
@@ -145,7 +154,7 @@ pub fn main() !void {
     defer kd.storeHashMap(&filedb.keydir) catch |err| {
         std.log.debug("Error storing hashmap: {}", .{err});
     };
-    const value = try filedb.get("a");
+    const value = try filedb.get("c");
     if (value == null) {
         std.log.debug("Value Not found in DB", .{});
         return;

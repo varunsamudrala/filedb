@@ -1,3 +1,4 @@
 .zig-cache/
 *.db
 *.hints
+zig-out/*

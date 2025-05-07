@@ -1,14 +1,16 @@
 {
-	"version": "0.2.0",
-	"configurations": [
-		{
-			"name": "Debug Main",
-			"type": "node",
-			"request": "launch",
-			"program": "${workspaceFolder}/filedb",
-			"preLaunchTask": "buildAndMove",
-			"MIMode": "gdb",
-			"cwd": "${workspaceFolder}"
-		}
-	]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Zig App",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/zig-out/main",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": false,
+      "terminal": "integrated",
+      "preLaunchTask": "zig: build"
+    }
+  ]
 }
