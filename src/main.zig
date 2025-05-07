@@ -4,6 +4,7 @@ const utils = @import("utils.zig");
 const oldfiles = @import("oldfiles.zig");
 const kd = @import("keydir.zig");
 const Record = @import("record.zig");
+const expect = std.testing.expect;
 // open file
 // mutex
 // bufPool
@@ -217,10 +218,86 @@ pub fn main() !void {
 
     if (value2 == null) {
         std.log.debug("Value Not found in DB", .{});
-        return;
     } else {
         const final_value2 = value2.?;
         std.log.debug("found value '{s}'", .{final_value2});
         allocator.free(value2.?);
     }
+
+    const keylist = try filedb.list(allocator);
+    for (keylist.items) |v| {
+        std.debug.print("value: {s}\n", .{v});
+    }
+
+    for (keylist.items) |v| {
+        allocator.free(v);
+    }
+    keylist.deinit();
+}
+
+test "filedb initialized" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (gpa.deinit() != .ok) @panic("leak");
+    const allocator = gpa.allocator();
+
+    const filedb = try FileDB.init(allocator);
+    defer filedb.deinit();
+    try expect(true);
+}
+
+test "insert a value and get it back" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (gpa.deinit() != .ok) @panic("leak");
+    const allocator = gpa.allocator();
+
+    const filedb = try FileDB.init(allocator);
+    defer filedb.deinit();
+
+    try filedb.put("key1", "value1");
+
+    const value = try filedb.get("key1");
+
+    try expect(value != null);
+    defer if (value) |v| allocator.free(v);
+
+    const final_value = value.?;
+    std.log.debug("found value '{s}'", .{final_value});
+    try std.testing.expectEqualStrings("value1", final_value);
+}
+
+test "get a value which does not exist" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (gpa.deinit() != .ok) @panic("leak");
+    const allocator = gpa.allocator();
+
+    const filedb = try FileDB.init(allocator);
+    defer filedb.deinit();
+
+    const value = try filedb.get("key1");
+
+    try expect(value == null);
+}
+
+test "list all keys" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (gpa.deinit() != .ok) @panic("leak");
+    const allocator = gpa.allocator();
+
+    const filedb = try FileDB.init(allocator);
+    defer filedb.deinit();
+
+    try filedb.put("key1", "value1");
+    try filedb.put("key2", "value1");
+    try filedb.put("key3", "value1");
+    try filedb.put("key4", "value1");
+
+    const keylist = try filedb.list(allocator);
+    defer {
+        for (keylist.items) |v| {
+            allocator.free(v);
+        }
+        keylist.deinit();
+    }
+
+    try std.testing.expectEqual(4, keylist.items.len);
 }
