@@ -142,6 +142,35 @@ const FileDB = struct {
             std.log.info("Key not found: {s}", .{key});
         }
     }
+
+    pub fn list(self: *FileDB, allocator: std.mem.Allocator) !std.ArrayList([]u8) {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        // Initialize the array list
+        var keylist = std.ArrayList([]u8).init(allocator);
+        errdefer {
+            // Free any keys we've already added if we encounter an error
+            for (keylist.items) |item| {
+                allocator.free(item);
+            }
+            keylist.deinit();
+        }
+
+        // Iterate through all keys in the map
+        var key_itr = self.keydir.keyIterator();
+        while (key_itr.next()) |entry| {
+            // Duplicate the key
+            const key = try allocator.dupe(u8, entry.*);
+            // Try to append, free key if append fails
+            keylist.append(key) catch |err| {
+                allocator.free(key);
+                return err;
+            };
+        }
+
+        return keylist;
+    }
 };
 
 pub fn main() !void {
