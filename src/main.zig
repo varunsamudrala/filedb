@@ -79,8 +79,8 @@ const FileDB = struct {
         const offset = try self.datafile.store(buf);
         const metadata = kd.Metadata.init(self.datafile.id, record_size, offset, record.tstamp);
 
-        // get the entry if already present, if doesnt exist, dynamically allocate a new
-        // key else reuse the old one.
+        // get the entry if already present, if doesnt exist,
+        // dynamically allocate a new key else reuse the old one.
         const entry = try self.keydir.getOrPut(key);
         if (!entry.found_existing) {
             const copy_key = try self.allocator.dupe(u8, key);
@@ -123,6 +123,25 @@ const FileDB = struct {
         const value = try self.allocator.dupe(u8, record.value);
         return value;
     }
+
+    pub fn delete(self: *FileDB, key: []const u8) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        // update the value of the key with a tombstone value
+        const data = [_]u8{};
+        try self.storeKV(key, &data);
+
+        // remove the key from the keydir and deallocate the key memory.
+        const entry = self.keydir.fetchRemove(key);
+        if (entry) |e| {
+            // Free the dynamically allocated key
+            self.allocator.free(e.key);
+            std.log.info("Deleted key: {s}", .{key});
+        } else {
+            std.log.info("Key not found: {s}", .{key});
+        }
+    }
 };
 
 pub fn main() !void {
@@ -139,7 +158,6 @@ pub fn main() !void {
     try filedb.put("a", "value1");
     try filedb.put("b", "value2");
     try filedb.put("f", "value2");
-    try filedb.put("g", "value2");
     try filedb.put("c", "value3");
     try filedb.put("d", "value4");
     try filedb.put("e", "value5");
@@ -154,12 +172,26 @@ pub fn main() !void {
     defer kd.storeHashMap(&filedb.keydir) catch |err| {
         std.log.debug("Error storing hashmap: {}", .{err});
     };
+
     const value = try filedb.get("c");
     if (value == null) {
         std.log.debug("Value Not found in DB", .{});
         return;
+    } else {
+        const final_value = value.?;
+        std.log.debug("found value '{s}'", .{final_value});
+        allocator.free(value.?);
     }
-    defer allocator.free(value.?);
-    const final_value = value.?;
-    std.log.debug("found value '{s}'", .{final_value});
+
+    try filedb.delete("d");
+    const value2 = try filedb.get("d");
+
+    if (value2 == null) {
+        std.log.debug("Value Not found in DB", .{});
+        return;
+    } else {
+        const final_value2 = value2.?;
+        std.log.debug("found value '{s}'", .{final_value2});
+        allocator.free(value2.?);
+    }
 }
