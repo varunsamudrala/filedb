@@ -3,7 +3,8 @@ const datafile = @import("datafile.zig");
 const utils = @import("utils.zig");
 const oldfiles = @import("oldfiles.zig");
 const kd = @import("keydir.zig");
-const Record = @import("record.zig");
+const record = @import("record.zig");
+const config = @import("config.zig");
 const expect = std.testing.expect;
 // open file
 // mutex
@@ -69,16 +70,16 @@ const FileDB = struct {
     }
 
     fn storeKV(self: *FileDB, key: []const u8, value: []const u8) !void {
-        const record = try Record.Record.init(self.allocator, key, value);
-        defer record.deinit();
+        const rec = try record.Record.init(self.allocator, key, value);
+        defer rec.deinit();
 
-        const record_size = @sizeOf(Record.Record) - @sizeOf([]u8) * 2 + record.key_len + record.value_len;
+        const record_size = @sizeOf(record.Record) - @sizeOf([]u8) * 2 + rec.key_len + rec.value_len;
         const buf = try self.allocator.alloc(u8, record_size);
         defer self.allocator.free(buf);
 
-        try record.encode(buf);
+        try rec.encode(buf);
         const offset = try self.datafile.store(buf);
-        const metadata = kd.Metadata.init(self.datafile.id, record_size, offset, record.tstamp);
+        const metadata = kd.Metadata.init(self.datafile.id, record_size, offset, rec.tstamp);
 
         // get the entry if already present, if doesnt exist,
         // dynamically allocate a new key else reuse the old one.
@@ -118,10 +119,10 @@ const FileDB = struct {
             try self.oldfiles.get(buf, metadata.?.file_id, metadata.?.value_pos, metadata.?.value_sz);
         }
         //decode data and put in response array
-        const record = try Record.decodeRecord(self.allocator, buf);
-        defer record.deinit();
+        const rec = try record.decodeRecord(self.allocator, buf);
+        defer rec.deinit();
 
-        const value = try self.allocator.dupe(u8, record.value);
+        const value = try self.allocator.dupe(u8, rec.value);
         return value;
     }
 
