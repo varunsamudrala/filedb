@@ -1,9 +1,9 @@
 const std = @import("std");
 const Crc32 = std.hash.crc.Crc32;
 
-pub fn listAllDatabaseFiles(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
-    var dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
-    defer dir.close();
+// list all the database files in the given directory
+// directory must be open with the iterate flag true
+pub fn listAllDatabaseFiles(allocator: std.mem.Allocator, dir: std.fs.Dir) !std.ArrayList([]const u8) {
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
@@ -65,3 +65,26 @@ pub fn crc32Checksum(data: []const u8) u32 {
 
 pub const MAX_KEY_LEN = 4294967296; // 2^32
 pub const MAX_VAL_LEN = 4294967296; // 2^32
+
+pub fn openUserDir(user_path: []const u8) !std.fs.Dir {
+    if (std.fs.path.isAbsolute(user_path)) {
+        // Try opening absolute path
+        return std.fs.openDirAbsolute(user_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => {
+                try std.fs.makeDirAbsolute(user_path); // Create missing directory
+                return std.fs.openDirAbsolute(user_path, .{ .iterate = true });
+            },
+            else => return err,
+        };
+    } else {
+        // Try opening relative path from CWD
+        const cwd = std.fs.cwd();
+        return cwd.openDir(user_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => {
+                try cwd.makeDir(user_path);
+                return cwd.openDir(user_path, .{ .iterate = true });
+            },
+            else => return err,
+        };
+    }
+}

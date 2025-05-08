@@ -1,7 +1,10 @@
 const std = @import("std");
 const Oldfiles = @import("oldfiles.zig").OldFiles;
+const utils = @import("utils.zig");
 
 // hashmap of key-> file_id, value_sz, value_pos, tstamp
+
+const HINTS_FILE = "filedb.hints";
 
 pub const Metadata = struct {
     file_id: u32,
@@ -19,9 +22,12 @@ pub const Metadata = struct {
     }
 };
 
-pub fn loadKeyDir(allocator: std.mem.Allocator) !std.StringHashMap(Metadata) {
+pub fn loadKeyDir(allocator: std.mem.Allocator, dir: []const u8) !std.StringHashMap(Metadata) {
     var hashmap = std.StringHashMap(Metadata).init(allocator);
-    var file = std.fs.cwd().openFile("filedb.hints", .{}) catch |err| {
+
+    const path = try utils.openUserDir(dir);
+
+    var file = path.openFile(HINTS_FILE, .{}) catch |err| {
         std.log.debug("Error opening hint file: {}", .{err});
         return hashmap;
     };
@@ -56,10 +62,9 @@ pub fn loadKeyDir(allocator: std.mem.Allocator) !std.StringHashMap(Metadata) {
     return hashmap;
 }
 
-pub fn storeHashMap(
-    hashmap: *std.StringHashMap(Metadata),
-) !void {
-    var file = try std.fs.cwd().createFile("filedb.hints", .{});
+pub fn storeHashMap(hashmap: *std.StringHashMap(Metadata), dir: []const u8) !void {
+    const path = try utils.openUserDir(dir);
+    var file = try path.createFile(HINTS_FILE, .{});
     defer file.close();
     var writer = file.writer();
 

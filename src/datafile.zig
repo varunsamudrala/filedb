@@ -1,5 +1,5 @@
 const std = @import("std");
-
+const util = @import("utils.zig");
 const filename = "file_{}.db";
 
 pub const Datafile = struct {
@@ -9,15 +9,17 @@ pub const Datafile = struct {
     id: u32,
     offset: u64,
 
-    pub fn init(index: u32) !Datafile {
+    pub fn init(index: u32, user_path: []const u8) !Datafile {
         var file_buf: [32]u8 = undefined;
         const file = try std.fmt.bufPrint(&file_buf, filename, .{index});
-        const writer = std.fs.cwd().createFile(file, .{}) catch |err| {
+
+        const path = try util.openUserDir(user_path);
+        const writer = path.createFile(file, .{}) catch |err| {
             std.debug.print("Failed to create file '{s}': {}\n", .{ file, err });
             return err;
         };
 
-        const reader = std.fs.cwd().openFile(file, .{}) catch |err| {
+        const reader = path.openFile(file, .{}) catch |err| {
             std.debug.print("Failed to open file for reading '{s}': {}\n", .{ file, err });
             return err;
         };

@@ -7,12 +7,14 @@ pub const OldFiles = struct {
     filemap: std.AutoHashMap(u32, datafile.Datafile),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) !*OldFiles {
-        const filelist = try utils.listAllDatabaseFiles(allocator);
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !*OldFiles {
+        const dir = try utils.openUserDir(path);
+        const filelist = try utils.listAllDatabaseFiles(allocator, dir);
+
         var filemap = std.AutoHashMap(u32, datafile.Datafile).init(allocator);
         for (filelist.items) |entry| {
             const file_id = try utils.parseIdFromFilename(entry);
-            const df = try datafile.Datafile.init(file_id);
+            const df = try datafile.Datafile.init(file_id, path);
             try filemap.put(file_id, df);
         }
         const oldfiles = try allocator.create(OldFiles);

@@ -19,11 +19,17 @@ const FileDB = struct {
     oldfiles: *oldfiles.OldFiles,
     mu: std.Thread.Mutex,
     allocator: std.mem.Allocator,
+    config: config.Options,
 
     // initialize the filedb with keydir and other structures
-    pub fn init(allocator: std.mem.Allocator) !*FileDB {
-        const keydir = try kd.loadKeyDir(allocator);
-        const oldfile = try oldfiles.OldFiles.init(allocator);
+    pub fn init(allocator: std.mem.Allocator, options: ?config.Options) !*FileDB {
+        var conf = config.defaultOptions();
+        if (options) |option| {
+            conf = option;
+        }
+
+        const keydir = try kd.loadKeyDir(allocator, conf.dir);
+        const oldfile = try oldfiles.OldFiles.init(allocator, conf.dir);
 
         // get the last used fileid
         var id: u32 = 1;
@@ -36,11 +42,12 @@ const FileDB = struct {
 
         const filedb = try allocator.create(FileDB);
         filedb.* = .{
-            .datafile = try datafile.Datafile.init(id),
+            .datafile = try datafile.Datafile.init(id, conf.dir),
             .keydir = keydir,
             .oldfiles = oldfile,
             .mu = std.Thread.Mutex{},
             .allocator = allocator,
+            .config = conf,
         };
         return filedb;
     }
@@ -91,6 +98,9 @@ const FileDB = struct {
         entry.value_ptr.* = metadata;
 
         //possible fsync
+        if (self.config.alwaysFsync) {
+            try self.datafile.sync();
+        }
     }
 
     pub fn get(self: *FileDB, key: []const u8) !?[]const u8 {
@@ -187,7 +197,7 @@ pub fn main() !void {
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
-    const filedb = try FileDB.init(allocator);
+    const filedb = try FileDB.init(allocator, null);
     defer filedb.deinit();
     var it = filedb.keydir.iterator();
     while (it.next()) |entry| {
@@ -248,7 +258,9 @@ test "filedb initialized" {
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
-    const filedb = try FileDB.init(allocator);
+    var options = config.defaultOptions();
+    options.dir = "test_4";
+    const filedb = try FileDB.init(allocator, options);
     defer filedb.deinit();
     try expect(true);
 }
@@ -258,7 +270,9 @@ test "insert a value and get it back" {
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
-    const filedb = try FileDB.init(allocator);
+    var options = config.defaultOptions();
+    options.dir = "test_3";
+    const filedb = try FileDB.init(allocator, options);
     defer filedb.deinit();
 
     try filedb.put("key1", "value1");
@@ -278,7 +292,9 @@ test "get a value which does not exist" {
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
-    const filedb = try FileDB.init(allocator);
+    var options = config.defaultOptions();
+    options.dir = "test_2";
+    const filedb = try FileDB.init(allocator, options);
     defer filedb.deinit();
 
     const value = try filedb.get("key1");
@@ -291,7 +307,9 @@ test "list all keys" {
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
-    const filedb = try FileDB.init(allocator);
+    var options = config.defaultOptions();
+    options.dir = "test_1";
+    const filedb = try FileDB.init(allocator, options);
     defer filedb.deinit();
 
     try filedb.put("key1", "value1");
