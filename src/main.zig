@@ -172,6 +172,13 @@ const FileDB = struct {
 
         return keylist;
     }
+
+    pub fn sync(self: *FileDB) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        try self.datafile.sync();
+    }
 };
 
 pub fn main() !void {

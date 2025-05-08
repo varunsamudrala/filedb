@@ -65,6 +65,10 @@ pub const Datafile = struct {
             return ErrorMissingData.MissingData;
         }
     }
+
+    pub fn sync(self: Datafile) !void {
+        try self.writer.sync();
+    }
 };
 
 const ErrorMissingData = error{MissingData};
