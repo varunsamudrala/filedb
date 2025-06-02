@@ -1,7 +1,7 @@
 const std = @import("std");
 const datafile = @import("datafile.zig");
 const utils = @import("utils.zig");
-const oldfiles = @import("oldfiles.zig");
+const Oldfiles = @import("oldfiles.zig").OldFiles;
 const kd = @import("keydir.zig");
 const record = @import("record.zig");
 const config = @import("config.zig");
@@ -16,7 +16,7 @@ const expect = std.testing.expect;
 const FileDB = struct {
     datafile: datafile.Datafile,
     keydir: std.StringHashMap(kd.Metadata),
-    oldfiles: *oldfiles.OldFiles,
+    oldfiles: *Oldfiles,
     mu: std.Thread.Mutex,
     allocator: std.mem.Allocator,
     config: config.Options,
@@ -28,27 +28,36 @@ const FileDB = struct {
             conf = option;
         }
 
-        const keydir = try kd.loadKeyDir(allocator, conf.dir);
-        const oldfile = try oldfiles.OldFiles.init(allocator, conf.dir);
+        const filedb = try allocator.create(FileDB);
+
+        // Initialize keydir first
+        const keydir = std.StringHashMap(kd.Metadata).init(allocator);
+
+        // Initialize oldfiles
+        const oldfiles_ptr = try Oldfiles.init(allocator, conf.dir);
+
+        filedb.* = .{
+            .mu = std.Thread.Mutex{},
+            .allocator = allocator,
+            .config = conf,
+            .keydir = keydir,
+            .oldfiles = oldfiles_ptr,
+            .datafile = undefined, // Will be set after calculating the ID
+        };
+
+        // Load keydir data
+        try filedb.loadKeyDir();
 
         // get the last used fileid
         var id: u32 = 1;
-        var it = oldfile.filemap.keyIterator();
+        var it = filedb.oldfiles.filemap.keyIterator();
         while (it.next()) |entry| {
             if (entry.* >= id) {
                 id = entry.* + 1;
             }
         }
+        filedb.datafile = try datafile.Datafile.init(id, conf.dir);
 
-        const filedb = try allocator.create(FileDB);
-        filedb.* = .{
-            .datafile = try datafile.Datafile.init(id, conf.dir),
-            .keydir = keydir,
-            .oldfiles = oldfile,
-            .mu = std.Thread.Mutex{},
-            .allocator = allocator,
-            .config = conf,
-        };
         return filedb;
     }
 
@@ -190,6 +199,66 @@ const FileDB = struct {
 
         try self.datafile.sync();
     }
+
+    pub fn storeHashMap(self: *FileDB) !void {
+        const path = try utils.openUserDir(self.config.dir);
+        var file = try path.createFile(kd.HINTS_FILE, .{});
+        defer file.close();
+        var writer = file.writer();
+
+        // Write number of hashmap entries
+        try writer.writeInt(u32, @intCast(self.keydir.count()), std.builtin.Endian.little);
+        var it = self.keydir.iterator();
+        while (it.next()) |entry| {
+            // Write key length and key
+            try writer.writeInt(u32, @intCast(entry.key_ptr.*.len), std.builtin.Endian.little);
+            try writer.writeAll(entry.key_ptr.*);
+
+            const meta = entry.value_ptr.*;
+            // Write number of metadata entries
+            try writer.writeInt(u32, meta.file_id, std.builtin.Endian.little);
+            try writer.writeInt(usize, meta.value_sz, std.builtin.Endian.little);
+            try writer.writeInt(usize, meta.value_pos, std.builtin.Endian.little);
+            try writer.writeInt(i64, meta.tstamp, std.builtin.Endian.little);
+        }
+    }
+    pub fn loadKeyDir(self: *FileDB) !void {
+        const path = try utils.openUserDir(self.config.dir);
+
+        var file = path.openFile(kd.HINTS_FILE, .{}) catch |err| {
+            std.log.debug("Error opening hint file: {}", .{err});
+            return;
+        };
+        defer file.close();
+        var reader = file.reader();
+        const stat = try file.stat();
+        if (stat.size == 0) {
+            return;
+        }
+
+        // Read number of hashmap entries
+        const entry_count = try reader.readInt(u32, std.builtin.Endian.little);
+        var i: u32 = 0;
+        while (i < entry_count) : (i += 1) {
+            // Read key length and key
+            const key_len = try reader.readInt(u32, std.builtin.Endian.little);
+            const key_buf = try self.allocator.alloc(u8, key_len);
+            errdefer self.allocator.free(key_buf);
+            try reader.readNoEof(key_buf);
+
+            // Read metadata items
+            const file_id = try reader.readInt(u32, std.builtin.Endian.little);
+            const value_sz = try reader.readInt(usize, std.builtin.Endian.little);
+            const value_pos = try reader.readInt(usize, std.builtin.Endian.little);
+            const tstamp = try reader.readInt(i64, std.builtin.Endian.little);
+
+            const metadata = kd.Metadata.init(file_id, value_sz, value_pos, tstamp);
+
+            try self.keydir.put(key_buf, metadata);
+        }
+
+        return;
+    }
 };
 
 pub fn main() !void {
@@ -217,7 +286,7 @@ pub fn main() !void {
     while (it.next()) |entry| {
         std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
-    defer kd.storeHashMap(&filedb.keydir) catch |err| {
+    defer filedb.storeHashMap() catch |err| {
         std.log.debug("Error storing hashmap: {}", .{err});
     };
 
