@@ -6,6 +6,7 @@ const kd = @import("keydir.zig");
 const record = @import("record.zig");
 const config = @import("config.zig");
 const expect = std.testing.expect;
+const Logger = @import("logger.zig").Logger;
 // open file
 // mutex
 // bufPool
@@ -20,6 +21,7 @@ const FileDB = struct {
     mu: std.Thread.Mutex,
     allocator: std.mem.Allocator,
     config: config.Options,
+    log: Logger,
 
     // initialize the filedb with keydir and other structures
     pub fn init(allocator: std.mem.Allocator, options: ?config.Options) !*FileDB {
@@ -43,10 +45,12 @@ const FileDB = struct {
             .keydir = keydir,
             .oldfiles = oldfiles_ptr,
             .datafile = undefined, // Will be set after calculating the ID
+            .log = Logger.init(conf.log_level),
         };
 
         // Load keydir data
         try filedb.loadKeyDir();
+        filedb.log.info("============= STARTING FILEDB ================", .{});
 
         // get the last used fileid
         var id: u32 = 1;
@@ -56,8 +60,9 @@ const FileDB = struct {
                 id = entry.* + 1;
             }
         }
+        filedb.log.debug("last used file id: {}", .{id});
         filedb.datafile = try datafile.Datafile.init(id, conf.dir);
-
+        filedb.log.info("================== FileDB created ===============", .{});
         return filedb;
     }
 
@@ -74,6 +79,7 @@ const FileDB = struct {
         self.datafile.deinit();
 
         // Finally free the FileDB struct itself
+        self.log.info("SHUTTING DOWN FILEDB", .{});
         self.allocator.destroy(self);
     }
 
@@ -304,7 +310,7 @@ pub fn main() !void {
     const value2 = try filedb.get("d");
 
     if (value2 == null) {
-        std.log.debug("Value Not found in DB", .{});
+        std.log.err("Value Not found in DB", .{});
     } else {
         const final_value2 = value2.?;
         std.log.debug("found value '{s}'", .{final_value2});
