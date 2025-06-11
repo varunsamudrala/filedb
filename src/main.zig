@@ -1,11 +1,12 @@
 const std = @import("std");
+const time = std.time;
+const expect = std.testing.expect;
 const Datafile = @import("datafile.zig").Datafile;
 const utils = @import("utils.zig");
 const Oldfiles = @import("oldfiles.zig").OldFiles;
 const kd = @import("keydir.zig");
 const record = @import("record.zig");
 const config = @import("config.zig");
-const expect = std.testing.expect;
 const Logger = @import("logger.zig").Logger;
 // open file
 // mutex
@@ -15,7 +16,7 @@ const Logger = @import("logger.zig").Logger;
 // lock files
 
 const FileDB = struct {
-    datafile: Datafile,
+    datafile: *Datafile,
     keydir: std.StringHashMap(kd.Metadata),
     oldfiles: *Oldfiles,
     mu: std.Thread.Mutex,
@@ -30,31 +31,24 @@ const FileDB = struct {
             conf = option;
         }
 
-        const filedb = try allocator.create(FileDB);
-
+        // Initialize oldfiles
+        const oldfilesMap = std.AutoHashMap(u32, *Datafile).init(allocator);
+        const oldfiles = try Oldfiles.init(allocator, oldfilesMap, conf.dir);
+        try oldfiles.initializeMap();
         // Initialize keydir first
         const keydir = std.StringHashMap(kd.Metadata).init(allocator);
 
-        // Initialize oldfiles
-        const oldfiles_ptr = try Oldfiles.init(allocator, conf.dir);
-
+        const filedb = try allocator.create(FileDB);
         filedb.* = .{
             .mu = std.Thread.Mutex{},
             .allocator = allocator,
             .config = conf,
             .keydir = keydir,
-            .oldfiles = oldfiles_ptr,
+            .oldfiles = oldfiles,
             .datafile = undefined, // Will be set after calculating the ID
             .log = Logger.init(conf.log_level),
         };
-
-        // Load keydir data
-        filedb.mu.lock();
-        try filedb.loadKeyDir();
-        filedb.mu.unlock();
-
         filedb.log.info("============= STARTING FILEDB ================", .{});
-
         // get the last used fileid
         var id: u32 = 1;
         var it = filedb.oldfiles.filemap.keyIterator();
@@ -63,13 +57,23 @@ const FileDB = struct {
                 id = entry.* + 1;
             }
         }
+        var dir = try std.fs.openDirAbsolute(conf.dir, .{ .iterate = true });
+        defer dir.close();
         filedb.log.debug("last used file id: {}", .{id});
-        filedb.datafile = try Datafile.init(id, conf.dir);
+        filedb.datafile = try Datafile.init(allocator, id, dir);
+
+        // Load keydir data
+        try filedb.loadKeyDir();
+
+        const thread = try std.Thread.spawn(.{}, runCompaction, .{filedb});
+        thread.detach();
+
         filedb.log.info("================== FileDB created ===============", .{});
         return filedb;
     }
 
     pub fn deinit(self: *FileDB) void {
+        // self.mu.lock();
         var key_it = self.keydir.iterator();
         while (key_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -91,10 +95,10 @@ const FileDB = struct {
         defer self.mu.unlock();
 
         try utils.validateKV(key, value);
-        try self.storeKV(key, value);
+        try self.storeKV(self.datafile, key, value);
     }
 
-    fn storeKV(self: *FileDB, key: []const u8, value: []const u8) !void {
+    fn storeKV(self: *FileDB, datafile: *Datafile, key: []const u8, value: []const u8) !void {
         const rec = try record.Record.init(self.allocator, key, value);
         defer rec.deinit();
 
@@ -103,8 +107,8 @@ const FileDB = struct {
         defer self.allocator.free(buf);
 
         try rec.encode(buf);
-        const offset = try self.datafile.store(buf);
-        const metadata = kd.Metadata.init(self.datafile.id, record_size, offset, rec.tstamp);
+        const offset = try datafile.store(buf);
+        const metadata = kd.Metadata.init(datafile.id, record_size, offset, rec.tstamp);
 
         // get the entry if already present, if doesnt exist,
         // dynamically allocate a new key else reuse the old one.
@@ -160,7 +164,7 @@ const FileDB = struct {
 
         // update the value of the key with a tombstone value
         const data = [_]u8{};
-        try self.storeKV(key, &data);
+        try self.storeKV(self.datafile, key, &data);
 
         // remove the key from the keydir and deallocate the key memory.
         const entry = self.keydir.fetchRemove(key);
@@ -233,7 +237,10 @@ const FileDB = struct {
             try writer.writeInt(i64, meta.tstamp, std.builtin.Endian.little);
         }
     }
-    pub fn loadKeyDir(self: *FileDB) !void {
+
+    fn loadKeyDir(self: *FileDB) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
         const path = try utils.openUserDir(self.config.dir);
 
         var file = path.openFile(kd.HINTS_FILE, .{}) catch |err| {
@@ -272,6 +279,87 @@ const FileDB = struct {
     }
 };
 
+fn runCompaction(self: *FileDB) !void {
+    const interval = std.time.ns_per_s * 2;
+    while (true) {
+        time.sleep(interval);
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            try mergeDatafiles(self);
+            self.log.info("running every 100 milliseconds", .{});
+            std.debug.print("running every 100 milliseconds 2", .{});
+        }
+    }
+}
+
+fn mergeDatafiles(self: *FileDB) !void {
+    var mergeFsync = false;
+    if (self.oldfiles.filemap.count() < 2) {
+        return;
+    }
+    const tmpDirPath = try std.fs.path.join(self.allocator, &[_][]const u8{ self.config.dir, "..", "tmp" });
+    defer self.allocator.free(tmpDirPath);
+    try std.fs.makeDirAbsolute(tmpDirPath);
+    var tmpDirectory = try std.fs.openDirAbsolute(tmpDirPath, .{});
+    defer tmpDirectory.close();
+    defer std.fs.deleteDirAbsolute(tmpDirPath) catch |err| {
+        std.debug.print("Cannot Delete TempDir: {}", .{err});
+    };
+
+    const mergedDf = try Datafile.init(self.allocator, 0, tmpDirectory);
+    if (self.config.alwaysFsync) {
+        mergeFsync = true;
+        self.config.alwaysFsync = false;
+    }
+
+    var it = self.keydir.iterator();
+    while (it.next()) |entry| {
+        const keydir_record = try self.getValue(entry.key_ptr.*);
+        if (keydir_record) |existing_record| {
+            try self.storeKV(mergedDf, entry.key_ptr.*, existing_record);
+            self.allocator.free(existing_record);
+        }
+    }
+
+    const filemap = std.AutoHashMap(u32, *Datafile).init(self.allocator);
+    self.oldfiles.deinit();
+    self.oldfiles = try Oldfiles.init(self.allocator, filemap, self.config.dir);
+    try self.oldfiles.initializeMap();
+
+    var oldDir = try std.fs.openDirAbsolute(self.config.dir, .{ .iterate = true, .access_sub_paths = true });
+    defer oldDir.close();
+    var walker = try oldDir.walk(self.allocator);
+    defer walker.deinit();
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) {
+            continue;
+        }
+        if (std.mem.endsWith(u8, entry.basename, ".db")) {
+            oldDir.deleteFile(entry.path) catch |err| {
+                std.debug.print("Failed to remove {s}: {}\n", .{ entry.path, err });
+                continue;
+            };
+        }
+    }
+
+    const tmp_file_path = try std.fs.path.join(self.allocator, &[_][]const u8{ tmpDirPath, "file_0.db" });
+    const new_file_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.config.dir, "file_0.db" });
+    defer self.allocator.free(new_file_path);
+    defer self.allocator.free(tmp_file_path);
+    try std.fs.copyFileAbsolute(tmp_file_path, new_file_path, .{});
+    try std.fs.deleteFileAbsolute(tmp_file_path);
+
+    self.datafile.deinit();
+    self.datafile = mergedDf;
+
+    if (mergeFsync) {
+        try self.datafile.sync();
+        self.config.alwaysFsync = true;
+    }
+    return;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() != .ok) @panic("leak");
@@ -300,7 +388,6 @@ pub fn main() !void {
     defer filedb.storeHashMap() catch |err| {
         std.log.debug("Error storing hashmap: {}", .{err});
     };
-
     const value = try filedb.get("c");
     if (value == null) {
         std.log.debug("Value Not found in DB", .{});
@@ -310,7 +397,7 @@ pub fn main() !void {
         std.log.debug("found value '{s}'", .{final_value});
         allocator.free(value.?);
     }
-
+    std.time.sleep(10 * std.time.ns_per_s);
     try filedb.delete("d");
     const value2 = try filedb.get("d");
 
@@ -339,7 +426,7 @@ test "filedb initialized" {
     const allocator = gpa.allocator();
 
     var options = config.defaultOptions();
-    options.dir = "test_4";
+    options.dir = "/home/rajiv/projects/filedb/test_4";
     const filedb = try FileDB.init(allocator, options);
     defer filedb.deinit();
     try expect(true);

@@ -9,7 +9,7 @@ pub const Options = struct {
 
 pub fn defaultOptions() Options {
     return .{
-        .dir = "./filedb",
+        .dir = "/home/rajiv/projects/filedb/filedb",
         .alwaysFsync = false,
         .log_level = log.Level.info,
     };
