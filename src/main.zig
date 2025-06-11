@@ -1,5 +1,5 @@
 const std = @import("std");
-const datafile = @import("datafile.zig");
+const Datafile = @import("datafile.zig").Datafile;
 const utils = @import("utils.zig");
 const Oldfiles = @import("oldfiles.zig").OldFiles;
 const kd = @import("keydir.zig");
@@ -15,7 +15,7 @@ const Logger = @import("logger.zig").Logger;
 // lock files
 
 const FileDB = struct {
-    datafile: datafile.Datafile,
+    datafile: Datafile,
     keydir: std.StringHashMap(kd.Metadata),
     oldfiles: *Oldfiles,
     mu: std.Thread.Mutex,
@@ -49,7 +49,10 @@ const FileDB = struct {
         };
 
         // Load keydir data
+        filedb.mu.lock();
         try filedb.loadKeyDir();
+        filedb.mu.unlock();
+
         filedb.log.info("============= STARTING FILEDB ================", .{});
 
         // get the last used fileid
@@ -61,7 +64,7 @@ const FileDB = struct {
             }
         }
         filedb.log.debug("last used file id: {}", .{id});
-        filedb.datafile = try datafile.Datafile.init(id, conf.dir);
+        filedb.datafile = try Datafile.init(id, conf.dir);
         filedb.log.info("================== FileDB created ===============", .{});
         return filedb;
     }
@@ -207,6 +210,8 @@ const FileDB = struct {
     }
 
     pub fn storeHashMap(self: *FileDB) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
         const path = try utils.openUserDir(self.config.dir);
         var file = try path.createFile(kd.HINTS_FILE, .{});
         defer file.close();
