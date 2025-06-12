@@ -23,7 +23,8 @@ const FileDB = struct {
     allocator: std.mem.Allocator,
     config: config.Options,
     log: Logger,
-
+    compaction_thread: ?std.Thread = null,
+    should_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     // initialize the filedb with keydir and other structures
     pub fn init(allocator: std.mem.Allocator, options: ?config.Options) !*FileDB {
         var conf = config.defaultOptions();
@@ -33,8 +34,10 @@ const FileDB = struct {
 
         // Initialize oldfiles
         const oldfilesMap = std.AutoHashMap(u32, *Datafile).init(allocator);
-        const oldfiles = try Oldfiles.init(allocator, oldfilesMap, conf.dir);
-        try oldfiles.initializeMap();
+        var dir = try utils.openUserDir(conf.dir);
+        defer dir.close();
+        const oldfiles = try Oldfiles.init(allocator, oldfilesMap);
+        try oldfiles.initializeMap(dir);
         // Initialize keydir first
         const keydir = std.StringHashMap(kd.Metadata).init(allocator);
 
@@ -57,23 +60,30 @@ const FileDB = struct {
                 id = entry.* + 1;
             }
         }
-        var dir = try std.fs.openDirAbsolute(conf.dir, .{ .iterate = true });
-        defer dir.close();
         filedb.log.debug("last used file id: {}", .{id});
         filedb.datafile = try Datafile.init(allocator, id, dir);
 
         // Load keydir data
         try filedb.loadKeyDir();
 
-        const thread = try std.Thread.spawn(.{}, runCompaction, .{filedb});
-        thread.detach();
+        filedb.compaction_thread = try std.Thread.spawn(.{}, runCompaction, .{filedb});
 
         filedb.log.info("================== FileDB created ===============", .{});
         return filedb;
     }
 
     pub fn deinit(self: *FileDB) void {
-        // self.mu.lock();
+        self.should_shutdown.store(true, .release);
+
+        // Join thread if it was started
+        if (self.compaction_thread) |t| {
+            t.join();
+        }
+
+        self.storeHashMap() catch |err| {
+            self.log.err("Error storing hashmap: {}", .{err});
+        };
+
         var key_it = self.keydir.iterator();
         while (key_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -96,6 +106,14 @@ const FileDB = struct {
 
         try utils.validateKV(key, value);
         try self.storeKV(self.datafile, key, value);
+    }
+
+    pub fn get(self: *FileDB, key: []const u8) !?[]const u8 {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        const result = self.getValue(key);
+        return result;
     }
 
     fn storeKV(self: *FileDB, datafile: *Datafile, key: []const u8, value: []const u8) !void {
@@ -123,14 +141,6 @@ const FileDB = struct {
         if (self.config.alwaysFsync) {
             try self.datafile.sync();
         }
-    }
-
-    pub fn get(self: *FileDB, key: []const u8) !?[]const u8 {
-        self.mu.lock();
-        defer self.mu.unlock();
-
-        const result = self.getValue(key);
-        return result;
     }
 
     fn getValue(self: *FileDB, key: []const u8) !?[]const u8 {
@@ -280,8 +290,8 @@ const FileDB = struct {
 };
 
 fn runCompaction(self: *FileDB) !void {
-    const interval = std.time.ns_per_s * 2;
-    while (true) {
+    const interval = time.ns_per_s * 2;
+    while (!self.should_shutdown.load(.acquire)) {
         time.sleep(interval);
         {
             self.mu.lock();
@@ -298,12 +308,16 @@ fn mergeDatafiles(self: *FileDB) !void {
     if (self.oldfiles.filemap.count() < 2) {
         return;
     }
-    const tmpDirPath = try std.fs.path.join(self.allocator, &[_][]const u8{ self.config.dir, "..", "tmp" });
-    defer self.allocator.free(tmpDirPath);
-    try std.fs.makeDirAbsolute(tmpDirPath);
-    var tmpDirectory = try std.fs.openDirAbsolute(tmpDirPath, .{});
+    std.fs.cwd().makeDir("tmp") catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            std.debug.print("Directory already exists: {s}\n", .{"tmp"});
+        },
+        else => return err,
+    };
+
+    var tmpDirectory = try std.fs.cwd().openDir("tmp", .{ .iterate = true });
     defer tmpDirectory.close();
-    defer std.fs.deleteDirAbsolute(tmpDirPath) catch |err| {
+    defer std.fs.cwd().deleteTree("tmp") catch |err| {
         std.debug.print("Cannot Delete TempDir: {}", .{err});
     };
 
@@ -322,12 +336,7 @@ fn mergeDatafiles(self: *FileDB) !void {
         }
     }
 
-    const filemap = std.AutoHashMap(u32, *Datafile).init(self.allocator);
-    self.oldfiles.deinit();
-    self.oldfiles = try Oldfiles.init(self.allocator, filemap, self.config.dir);
-    try self.oldfiles.initializeMap();
-
-    var oldDir = try std.fs.openDirAbsolute(self.config.dir, .{ .iterate = true, .access_sub_paths = true });
+    var oldDir = try utils.openUserDir(self.config.dir);
     defer oldDir.close();
     var walker = try oldDir.walk(self.allocator);
     defer walker.deinit();
@@ -343,12 +352,12 @@ fn mergeDatafiles(self: *FileDB) !void {
         }
     }
 
-    const tmp_file_path = try std.fs.path.join(self.allocator, &[_][]const u8{ tmpDirPath, "file_0.db" });
-    const new_file_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.config.dir, "file_0.db" });
-    defer self.allocator.free(new_file_path);
-    defer self.allocator.free(tmp_file_path);
-    try std.fs.copyFileAbsolute(tmp_file_path, new_file_path, .{});
-    try std.fs.deleteFileAbsolute(tmp_file_path);
+    try tmpDirectory.copyFile("file_0.db", oldDir, "file_0.db", .{});
+
+    const filemap = std.AutoHashMap(u32, *Datafile).init(self.allocator);
+    self.oldfiles.deinit();
+    self.oldfiles = try Oldfiles.init(self.allocator, filemap);
+    try self.oldfiles.initializeMap(oldDir);
 
     self.datafile.deinit();
     self.datafile = mergedDf;
@@ -381,13 +390,12 @@ pub fn main() !void {
     try filedb.put("b", "extra_large_value");
     try filedb.put("c", "sm12");
 
+    time.sleep(10 * time.ns_per_s);
     it = filedb.keydir.iterator();
     while (it.next()) |entry| {
         std.log.debug("key:{s} value: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
     }
-    defer filedb.storeHashMap() catch |err| {
-        std.log.debug("Error storing hashmap: {}", .{err});
-    };
+
     const value = try filedb.get("c");
     if (value == null) {
         std.log.debug("Value Not found in DB", .{});
@@ -397,7 +405,6 @@ pub fn main() !void {
         std.log.debug("found value '{s}'", .{final_value});
         allocator.free(value.?);
     }
-    std.time.sleep(10 * std.time.ns_per_s);
     try filedb.delete("d");
     const value2 = try filedb.get("d");
 
@@ -420,14 +427,15 @@ pub fn main() !void {
     keylist.deinit();
 }
 
-test "filedb initialized" {
+test "filedbInitialized" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() != .ok) @panic("leak");
     const allocator = gpa.allocator();
 
     var options = config.defaultOptions();
-    options.dir = "/home/rajiv/projects/filedb/test_4";
+    options.dir = "/home/rajiv/projects/filedb/test_initialize";
     const filedb = try FileDB.init(allocator, options);
+    time.sleep(10 * time.ns_per_s);
     defer filedb.deinit();
     try expect(true);
 }
