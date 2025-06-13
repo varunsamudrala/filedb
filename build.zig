@@ -16,11 +16,19 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
-        .name = "filedb",
+        .name = "filedb-server",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    const lib = b.addStaticLibrary(.{
+        .name = "filedb",
+        .root_source_file = b.path("src/filedb.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    b.installArtifact(lib);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

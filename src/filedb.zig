@@ -256,7 +256,7 @@ pub const FileDB = struct {
         }
     }
 
-    fn loadKeyDir(self: *FileDB) !void {
+    pub fn loadKeyDir(self: *FileDB) !void {
         self.mu.lock();
         defer self.mu.unlock();
         const path = try utils.openUserDir(self.config.dir);
