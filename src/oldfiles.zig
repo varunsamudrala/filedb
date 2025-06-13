@@ -8,26 +8,15 @@ pub const OldFiles = struct {
     // path: []const u8,
 
     pub fn init(allocator: std.mem.Allocator, filemap: std.AutoHashMap(u32, *Datafile)) !*OldFiles {
-        // var filemap = std.AutoHashMap(u32, *Datafile).init(allocator);
         const oldfiles = try allocator.create(OldFiles);
-        // const duped_path = try allocator.dupe(u8, path);
         oldfiles.* = .{ .filemap = filemap, .allocator = allocator };
         return oldfiles;
     }
 
     pub fn initializeMap(self: *OldFiles, dir: std.fs.Dir) !void {
-        // std.debug.print("PATH: {s}\n", .{self.path});
-        // _ = dir.createFile(file_name, .{ .read = true, .exclusive = true }) catch |err| switch (err) {
-        //     error.PathAlreadyExists => {
-        //         // Open existing file
-        //     },
-        //     else => return err,
-        // };
-        // const file = try dir.openFile(file_name, .{ .mode = .read_write });
-        // var dir = try std.fs.openDirAbsolute(self.path, .{ .iterate = true });
-        // defer dir.close();
         const filelist = try utils.listAllDatabaseFiles(self.allocator, dir);
         for (filelist.items) |entry| {
+            std.debug.print("Found file: {s}", .{entry});
             const file_id = try utils.parseIdFromFilename(entry);
             const df = try Datafile.init(self.allocator, file_id, dir);
             try self.filemap.put(file_id, df);
@@ -39,7 +28,6 @@ pub const OldFiles = struct {
     }
 
     pub fn deinit(self: *OldFiles) void {
-        // self.allocator.free(self.path);
         var keydirIterator = self.filemap.iterator();
         while (keydirIterator.next()) |entry| {
             entry.value_ptr.*.deinit();
