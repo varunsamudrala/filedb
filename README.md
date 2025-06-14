@@ -10,6 +10,7 @@ FileDB is a Zig-implementation of Bitcask by Riak[^1] paper.
 - A compaction process running every `config.compactionInterval` seconds, reads all the disk files and combines them into one file while updating the metadata hashtable.
 - A sync process syncs the open disk files once every `config.syncInterval`. Sync also can be done on every request if `config.alwaysFsync` is True.
 
+Read about internals in-depth at [FileDb](https://rajivharlalka.in/posts/filedb).
 
 ## Benefits:
 1. Since the metadata keeps an exact location of file and position in file for a record, fetching records become O(1) operation.
